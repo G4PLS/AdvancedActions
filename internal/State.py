@@ -56,6 +56,8 @@ class State(Gtk.Box):
         self.append(self.plugin_row)
         self.append(self.action_row)
 
+        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
         # Create Plugin UI Field
         self.plugin_ui = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.append(self.plugin_ui)
@@ -63,9 +65,6 @@ class State(Gtk.Box):
         # Connect Events
         self.plugin_row.combo_box.connect("changed", self.plugin_changed)
         self.action_row.combo_box.connect("changed", self.action_changed)
-
-        # Load Plugin Model
-        #self.load_plugin_model()
 
     def load_action_ui(self):
         self.remove(self.plugin_ui)
@@ -102,7 +101,6 @@ class State(Gtk.Box):
 
         for action_holder in self.available_actions:
             self.action_model.append([action_holder])
-
 
     #
     # EVENTS
@@ -206,23 +204,22 @@ class State(Gtk.Box):
 
         self.plugin_row.combo_box.connect("changed", self.plugin_changed)
         self.action_row.combo_box.connect("changed", self.action_changed)
-
     def set_state_settings(self, plugin_id, action_id):
+        # Get Settings for correct State
         settings = self.base_action.get_settings()
         state_settings = settings.get(self.SETTING_IDENTIFIER) or {}
 
+        # Get IDs
         state_plugin_id = state_settings.get("plugin-id")
         state_action_id = state_settings.get("action-id")
 
+        # Update IDs when they dont match anymore
         if state_action_id != action_id:
             state_settings = {"plugin-id": plugin_id, "action-id": action_id}
         if state_plugin_id != plugin_id:
             state_settings = {"plugin-id": plugin_id, "action-id": action_id}
 
-        print(self.SETTING_IDENTIFIER)
-        print(state_settings)
-        print("#####")
-
+        # Set Settings
         settings[self.SETTING_IDENTIFIER] = state_settings
         self.base_action.set_settings(settings)
 

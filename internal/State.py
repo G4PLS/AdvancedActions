@@ -1,6 +1,9 @@
+from copy import deepcopy
+
 from GtkHelper.GtkHelper import ComboRow
 from data.plugins.AdvancedActionPlugin.internal.FakeAction import FakeAction
 
+from loguru import logger as log
 import gi
 
 from src.backend.DeckManagement.DeckController import DeckController
@@ -9,12 +12,14 @@ from src.backend.PluginManager.ActionBase import ActionBase
 from src.backend.PluginManager.ActionHolder import ActionHolder
 from src.backend.PluginManager.PluginBase import PluginBase
 
+from ..internal.MethodCheckButton import MethodCheckButton
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Gtk, Adw
 
 import globals as gl
+
 
 class State(Gtk.Box):
     def __init__(self, state_id: int, base_action: ActionBase):
@@ -26,6 +31,13 @@ class State(Gtk.Box):
         self.available_actions: list[ActionHolder] = []
         self.SETTING_IDENTIFIER = f"State-{self.state_id}"
 
+        self.overridden_methods: list[str] = []  # Actual Methods that are overridden by the selected Action
+        self.method_translations: dict[str, str] = {
+            "OKD": "On Key Down",
+            "OKU": "On Key Up",
+            "OT": "On Tick"
+        }
+
         self.build()
 
     #
@@ -33,6 +45,23 @@ class State(Gtk.Box):
     #
 
     def build(self):
+        self.build_selection()
+
+        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        self.build_settings()
+
+        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        # Create Plugin UI Field
+        self.plugin_ui = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.append(self.plugin_ui)
+
+        # Connect Events
+        self.plugin_row.combo_box.connect("changed", self.plugin_changed)
+        self.action_row.combo_box.connect("changed", self.action_changed)
+
+    def build_selection(self):
         # Create Models
         self.plugin_model = Gtk.ListStore.new([str])
         self.action_model = Gtk.ListStore.new([str])
@@ -56,17 +85,45 @@ class State(Gtk.Box):
         self.append(self.plugin_row)
         self.append(self.action_row)
 
-        self.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+    def build_settings(self):
+        # Create Settings Section
+        self.settings_group = Adw.PreferencesGroup(title="State Settings")
 
-        # Create Plugin UI Field
-        self.plugin_ui = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.append(self.plugin_ui)
+        self.trigger_row = Adw.PreferencesRow(title="Triggers")
 
-        # Connect Events
-        self.plugin_row.combo_box.connect("changed", self.plugin_changed)
-        self.action_row.combo_box.connect("changed", self.action_changed)
+        self.trigger_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, margin_end=10, margin_start=10)
 
-    def load_action_ui(self):
+        self.trigger_row.set_child(self.trigger_box)
+
+        self.trigger_label = Gtk.Label(label="Triggers", hexpand=True, xalign=0)
+        self.trigger_box.append(self.trigger_label)
+
+        self.trigger_grid = Gtk.Grid()
+        self.trigger_box.append(self.trigger_grid)
+
+        self.build_trigger_grid()
+
+        self.settings_group.add(self.trigger_row)
+
+        self.append(self.settings_group)
+
+    def build_trigger_grid(self):
+        self.trigger_box.remove(self.trigger_grid)
+
+        self.trigger_grid = Gtk.Grid()
+
+        self.trigger_grid.set_column_spacing(5)
+        self.trigger_grid.set_row_spacing(5)
+
+        for i, overridden_method in enumerate(self.overridden_methods):
+            check_box = MethodCheckButton(label=self.method_translations.get(overridden_method),
+                                          method=overridden_method)
+            check_box.toggle_event = self.checkbutton_toggled
+            self.trigger_grid.attach(check_box, 0, i, 1, 1)
+
+        self.trigger_box.append(self.trigger_grid)
+
+    def build_action_ui(self):
         self.remove(self.plugin_ui)
 
         if self.action is None:
@@ -96,6 +153,7 @@ class State(Gtk.Box):
 
         for plugin in plugins:
             self.plugin_model.append([plugin[0]])
+
     def load_action_model(self):
         self.action_model.clear()
 
@@ -119,10 +177,14 @@ class State(Gtk.Box):
         self.load_action_model()
         self.action_row.combo_box.connect("changed", self.action_changed)
 
-        self.load_action_ui()
+        self.build_action_ui()
+
+        self.get_action_methods()
+        self.build_trigger_grid()
 
         # Set Settings
         self.set_state_settings(plugin_id, None)
+
     def action_changed(self, combo_box, *args):
         settings = self.base_action.get_settings()
         plugin_id = settings.get(self.SETTING_IDENTIFIER, {}).get("plugin-id")
@@ -141,7 +203,31 @@ class State(Gtk.Box):
             )
 
         self.set_state_settings(plugin_id, action_id)
-        self.load_action_ui()
+        self.build_action_ui()
+
+    def checkbutton_toggled(self, state, method):
+        settings = self.base_action.get_settings()
+
+        state_settings = settings.get(self.SETTING_IDENTIFIER)
+
+        triggers = state_settings.get("method-triggers") or []
+
+        if method in triggers:
+            for trigger in triggers:
+                if trigger == method and state is True and method not in triggers:
+                    triggers.append(method)
+                    break
+                if trigger == method and state is False and method in triggers:
+                    triggers.remove(method)
+                    break
+        else:
+            triggers.append(method)
+
+        state_settings["method-triggers"] = triggers
+
+        settings[self.SETTING_IDENTIFIER] = state_settings
+
+        self.base_action.set_settings(settings)
 
     #
     # SETTINGS
@@ -172,6 +258,7 @@ class State(Gtk.Box):
         plugin_id = state_settings.get("plugin-id")
         action_id = state_settings.get("action-id")
 
+        # Disconnect events to not trigger change events
         self.plugin_row.combo_box.disconnect_by_func(self.plugin_changed)
         self.action_row.combo_box.disconnect_by_func(self.action_changed)
 
@@ -200,10 +287,12 @@ class State(Gtk.Box):
         if action_id is None or plugin_id is None:
             self.action_row.combo_box.set_active(-1)
 
-        self.load_action_ui()
+        self.build_action_ui()
 
+        # Reconnect events
         self.plugin_row.combo_box.connect("changed", self.plugin_changed)
         self.action_row.combo_box.connect("changed", self.action_changed)
+
     def set_state_settings(self, plugin_id, action_id):
         # Get Settings for correct State
         settings = self.base_action.get_settings()
@@ -242,4 +331,49 @@ class State(Gtk.Box):
 
         self.action.action.on_ready()
 
-        self.load_action_ui()
+        self.build_action_ui()
+        self.get_action_methods()
+        self.build_trigger_grid()
+
+    def get_action_methods(self):
+        self.overridden_methods = []
+
+        if self.action is None or self.action.action is None:
+            return
+
+        action: ActionBase = self.action.action
+
+        if not issubclass(type(action), ActionBase):
+            return
+
+        # Check Method Overloads
+        if type(action).on_key_down != ActionBase.on_key_down:
+            self.overridden_methods.append("OKD")
+        if type(action).on_key_up != ActionBase.on_key_up:
+            self.overridden_methods.append("OKU")
+        if type(action).on_tick != ActionBase.on_tick:
+            self.overridden_methods.append("OT")
+
+    def enable_visual_methods(self):
+        if self.action is None and self.action.action is None:
+            return
+        action = self.action.action
+
+        action.set_label = self.base_action.set_label
+        action.set_media = self.base_action.set_media
+
+    def disable_visual_methods(self):
+        if self.action is None and self.action.action is None:
+            return
+        action = self.action.action
+
+        action.set_label = self.set_label
+        action.set_media = self.set_media
+
+    def set_media(self, image=None, media_path=None, size: float = None, valign: float = None, halign: float = None,
+                  fps: int = 30, loop: bool = True, update: bool = True):
+        return
+
+    def set_label(self, text: str, position: str = "bottom", color: list[int] = None,
+    font_family: str = None, font_size = None, update: bool = True):
+        return

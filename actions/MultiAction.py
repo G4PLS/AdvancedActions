@@ -29,14 +29,14 @@ class MultiAction(ActionBase):
     #
 
     def on_ready(self):
+        self.triggers = [
+            ("On Key Down", "OKD"),
+            ("On Key Up", "OKU"),
+            ("On Tick", "OT")
+        ]
+
         self.states = [State(1, self), State(2, self)]
         self.current_state_index = 0  # Used on Key Down Event
-
-        self.triggers = [
-            ("On Key Down", 0b001),
-            ("On Key Up", 0b010),
-            ("On Tick", 0b100)
-        ]
 
         self.load_sub_actions()
 
@@ -44,7 +44,7 @@ class MultiAction(ActionBase):
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
         # Create Switch Model
-        self.state_swtich_model = Gtk.ListStore.new([str, int])
+        self.state_swtich_model = Gtk.ListStore.new([str, str])
 
         # Create Switch Combo Row
         self.state_swtich_row = ComboRow(title="Switch Behaviour", model=self.state_swtich_model)
@@ -93,6 +93,8 @@ class MultiAction(ActionBase):
         for state in self.states:
             state.load_sub_actions(self.get_settings())
 
+        self.states[self.current_state_index].enable_visual_methods()
+
     def load_settings(self):
         settings = self.get_settings()
         behaviour_code = settings.get("switch-behaviour")
@@ -129,14 +131,51 @@ class MultiAction(ActionBase):
         self.set_settings(settings)
 
     #
+    # MISC
+    #
+
+    def execute_triggers(self, callback_key: str):
+        settings = self.get_settings()
+        state = self.states[self.current_state_index]
+
+        triggers = settings.get(state.SETTING_IDENTIFIER, {}).get("method-triggers") or []
+
+        for trigger in triggers:
+            if trigger not in state.overridden_methods:
+                continue
+            if state.action is None or state.action.action is None:
+                continue
+
+            if trigger == "OKD" and trigger == callback_key:
+                state.action.action.on_key_down()
+            elif trigger == "OKU" and trigger == callback_key:
+                state.action.action.on_key_up()
+            elif trigger == "OT" and trigger == callback_key:
+                state.action.action.on_tick()
+
+    def change_state(self, behaviour_key: str):
+        settings = self.get_settings()
+        settings_behaviour = settings.get("switch-behaviour") or "OKD"
+
+        if behaviour_key == settings_behaviour:
+            self.states[self.current_state_index].disable_visual_methods()
+
+            self.current_state_index = 1 if self.current_state_index == 0 else 0
+
+            self.states[self.current_state_index].enable_visual_methods()
+
+    #
     # KEY ACTIONS
     #
 
     def on_key_down(self):
-        pass
+        self.execute_triggers("OKD")
+        self.change_state("OKD")
 
     def on_key_up(self):
-        pass
+        self.execute_triggers("OKU")
+        self.change_state("OKU")
 
     def on_tick(self):
-        pass
+        self.execute_triggers("OT")
+        self.change_state("OT")
